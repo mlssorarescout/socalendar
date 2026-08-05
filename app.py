@@ -39,11 +39,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# The app defaults to dark (see .streamlit/config.toml) but a viewer can still flip
+# to light from Settings, so the chart's own colors follow whichever is active
+# rather than assuming dark. `type` is None for one render right after a theme
+# change; dark is the safer fallback since it is the default.
+IS_DARK = st.context.theme.type != "light"
+
 TRACK_FILL = "rgba(140,144,152,0.10)"
 TRACK_LINE = "rgba(140,144,152,0.45)"
 BLOCK = "#2fae66"
 BLOCK_FOCUS = "#3f6fe0"
-KO_TICK = "#2b2f36"
+KO_TICK = "#e8e8ec" if IS_DARK else "#2b2f36"
+BUSY_FILL = "rgba(199,123,60,0.20)"
+BUSY_LINE = "rgba(199,123,60,0.65)"
+PLOT_TEMPLATE = "plotly_dark" if IS_DARK else "plotly_white"
 
 POS_SHORT = {"Goalkeeper": "GK", "Defender": "DEF", "Midfielder": "MID", "Forward": "FWD"}
 SCALE = ["#b3405c", "#cf7f56", "#9aa0a8", "#57a37c", "#1d7d55"]
@@ -102,11 +111,26 @@ def clicked_club(event):
     return None
 
 
-def show_table(df, **kw):
+def clicked_row(event):
+    """First selected row index out of a dataframe selection event, or None."""
+    if event is None:
+        return None
+    selection = getattr(event, "selection", None)
+    if selection is None and isinstance(event, dict):
+        selection = event.get("selection")
+    picked_rows = (selection or {}).get("rows") or []
+    return picked_rows[0] if picked_rows else None
+
+
+def show_table(df, key=None, selectable=False, **kw):
+    if key:
+        kw["key"] = key
+    if selectable and _SUPPORTS_SELECT and key:
+        kw["on_select"] = "rerun"
+        kw["selection_mode"] = "single-row"
     if _MODERN_WIDTH:
-        st.dataframe(df, width="stretch", **kw)
-    else:
-        st.dataframe(df, use_container_width=True, **kw)
+        return st.dataframe(df, width="stretch", **kw)
+    return st.dataframe(df, use_container_width=True, **kw)
 
 
 # ---------------------------------------------------------------------------
@@ -233,44 +257,6 @@ with st.sidebar:
         "field is committed.",
     )
     api_key = secret("SORARE_API_KEY")
-    with st.expander("API key" + (" ✓" if api_key else " (none)")):
-        if api_key:
-            st.caption(
-                "Using `SORARE_API_KEY` from Streamlit secrets — 600 calls a minute."
-            )
-        else:
-            st.caption(
-                "No `SORARE_API_KEY` in Streamlit secrets, so Sorare allows 20 calls a "
-                "minute and a large gallery reads slowly. Locally, copy "
-                "`.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and fill "
-                "it in; on Streamlit Community Cloud, add it under App settings → Secrets."
-            )
-        if st.button("Test connection", key="f_probe"):
-            if not username.strip():
-                st.session_state["probe"] = {
-                    "ok": False,
-                    "attempts": ["Type your Sorare username in the box above first."],
-                }
-            else:
-                try:
-                    st.session_state["probe"] = sorare_api.probe(
-                        username, api_key or None
-                    )
-                except sorare_api.SorareError as exc:
-                    st.session_state["probe"] = {"ok": False, "attempts": [str(exc)]}
-        result = st.session_state.get("probe")
-        if result:
-            if result.get("ok"):
-                st.success(
-                    f"Reached Sorare as **{result['nickname']}**. "
-                    f"Schema variant `{result['variant']}`."
-                )
-                if result.get("sample_club"):
-                    st.caption(f"Sample card resolves to {result['sample_club']}.")
-            else:
-                st.error("No query variant worked. What Sorare said:")
-                for line in result.get("attempts", []):
-                    st.caption(f"• {line}")
 
     if st.button("Load gallery", key="f_load"):
         if not username.strip():
@@ -302,37 +288,29 @@ with st.sidebar:
             st.caption(note)
         st.button("Clear gallery", on_click=clear_gallery, key="f_clear_gallery")
 
-    st.markdown("### Competition")
     slugs_present = sorted(team_leagues["slug"].unique())
     groups = sorted({core.slug_group(s) for s in slugs_present})
-    group = st.selectbox("Group", ["All"] + groups, index=0, key="f_group")
+    group = st.selectbox("Competition", ["All"] + groups, index=0, key="f_group")
     group_slugs = (
         slugs_present if group == "All"
         else [s for s in slugs_present if core.slug_group(s) == group]
     )
 
-    with st.expander("More options"):
-        tz = st.selectbox("Time zone", TZ_CHOICES, index=0, key="f_tz")
-        early_lead = st.slider("Sheets out earliest (min before KO)", 30, 150, 60, 5, key="f_early")
-        late_lead = st.slider("Sheets out latest (min before KO)", 0, 120, 0, 5, key="f_late")
-        if late_lead > early_lead:
-            early_lead, late_lead = late_lead, early_lead
-        keep_valid_many("f_leagues", set(group_slugs))
-        # No `default` here: keep_valid_many writes to session state, and passing
-        # both makes Streamlit warn. An unset multiselect starts empty anyway.
-        leagues = st.multiselect(
-            "Narrow to leagues",
-            sorted(group_slugs, key=league_label),
-            format_func=league_label,
-            help="Optional. Empty means every league in the group.",
-            key="f_leagues",
-        )
-        rows_shown = st.slider("Clubs on the chart", 5, 120, 60, 5, key="f_rows")
-        hide_uncovered = st.toggle(
-            "Hide games Sorare does not score", value=True, key="f_uncovered"
-        )
-        hide_tbd = st.toggle("Hide placeholder kickoff times", value=True, key="f_tbd")
-        st.button("Reset all filters", on_click=reset_filters, key="f_reset")
+    # "More options" renders at the bottom of the sidebar, but its values are
+    # needed here to build the club pool. Read them from session state — set by
+    # that widget on the previous run — with the same defaults it uses, rather
+    # than rendering it out of place just to get its values early.
+    keep_valid_many("f_leagues", set(group_slugs))
+    tz = st.session_state.get("f_tz", TZ_CHOICES[0])
+    early_lead = st.session_state.get("f_early", 60)
+    late_lead = st.session_state.get("f_late", 0)
+    if late_lead > early_lead:
+        early_lead, late_lead = late_lead, early_lead
+    # No stored default for the multiselect — an unset one starts empty anyway.
+    leagues = st.session_state.get("f_leagues", [])
+    rows_shown = st.session_state.get("f_rows", 60)
+    hide_uncovered = st.session_state.get("f_uncovered", True)
+    hide_tbd = st.session_state.get("f_tbd", True)
 
     pool_slugs = leagues or group_slugs
     pool_teams = set(team_leagues.loc[team_leagues["slug"].isin(pool_slugs), "team"])
@@ -411,7 +389,6 @@ with st.sidebar:
     if hide_tbd:
         pool = pool[~pool["kickoff_tbd"]]
 
-    st.markdown("### Gameweek")
     # Only offer gameweeks this competition actually plays in. Most leagues are
     # mid-break or pre-season for part of the export's range, and offering an
     # empty week just dead-ends the page.
@@ -424,11 +401,10 @@ with st.sidebar:
     default_gw = upcoming[0] if upcoming else gws[0]
     keep_valid("f_gw", set(gws))
     gw_choice = st.selectbox(
-        "Which gameweek",
+        "Gameweek",
         gws,
         index=gws.index(default_gw),
         format_func=core.gameweek_label,
-        label_visibility="collapsed",
         key="f_gw",
     )
     selected_gws = [gw_choice]
@@ -445,12 +421,10 @@ else:
     withheld = fixtures.iloc[0:0]
 
 with st.sidebar:
-    st.markdown("### Focus club")
     all_clubs = sorted(window["team"].unique())
     query = st.text_input(
-        "Search clubs",
+        "Focus club",
         placeholder="Type to filter clubs…",
-        label_visibility="collapsed",
         key="f_search",
     ).strip()
     club_options = (
@@ -463,6 +437,24 @@ with st.sidebar:
     focus_team = st.selectbox(
         "Focus club", club_options, index=0, label_visibility="collapsed", key="f_focus"
     )
+
+    with st.expander("More options"):
+        st.selectbox("Time zone", TZ_CHOICES, index=0, key="f_tz")
+        st.slider("Sheets out earliest (min before KO)", 30, 150, 60, 5, key="f_early")
+        st.slider("Sheets out latest (min before KO)", 0, 120, 0, 5, key="f_late")
+        # No `default` here: keep_valid_many (run earlier) writes to session
+        # state, and passing both makes Streamlit warn.
+        st.multiselect(
+            "Narrow to leagues",
+            sorted(group_slugs, key=league_label),
+            format_func=league_label,
+            help="Optional. Empty means every league in the group.",
+            key="f_leagues",
+        )
+        st.slider("Clubs on the chart", 5, 120, 60, 5, key="f_rows")
+        st.toggle("Hide games Sorare does not score", value=True, key="f_uncovered")
+        st.toggle("Hide placeholder kickoff times", value=True, key="f_tbd")
+        st.button("Reset all filters", on_click=reset_filters, key="f_reset")
 
 
 def local(ts):
@@ -515,18 +507,34 @@ def mesh_for(gw: int):
     return focus_fx, focus_ko, meshed
 
 
+def render_my_cards(picked):
+    """The 'My {club} cards' panel — shared by the chart click and the table click."""
+    if not picked:
+        return
+    mine = held_cards[held_cards["team"] == picked]
+    if mine.empty:
+        st.caption(f"No cards for {picked} in the current scarcity/in-season filter.")
+        return
+    with st.container(border=True):
+        st.markdown(f"**My {picked} cards** — {len(mine)}")
+        detail = pd.DataFrame({
+            "Player": mine["player"],
+            "Position": [POS_SHORT.get(x, x or "—") for x in mine["position"]],
+            "Scarcity": [
+                sorare_api.SCARCITY_LABELS.get(x, x or "—") for x in mine["scarcity"]
+            ],
+            "In season": [
+                "—" if pd.isna(x) else ("yes" if x else "no") for x in mine["in_season"]
+            ],
+        })
+        show_table(detail.sort_values("Player").reset_index(drop=True), hide_index=True)
+
+
 # ---------------------------------------------------------------------------
 # Page
 # ---------------------------------------------------------------------------
 
 st.title("Sorare Kickoff Planner")
-st.markdown(
-    f"<p class='note'>Green marks when a club's confirmed XI is expected — "
-    f"{early_lead} to {late_lead} minutes before it kicks off. Clubs are sorted by how much "
-    f"their block overlaps <b>{focus_team}</b>'s, so the ones you can safely pair with sit at the "
-    "top and the lulls open up as you scroll.</p>",
-    unsafe_allow_html=True,
-)
 
 view = st.radio(
     "Timeframe",
@@ -563,6 +571,10 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
     fig = go.Figure()
     span_ms = (x_hi - x_lo).total_seconds() * 1000.0
 
+    # Bars fill most of each row's band (rather than the old 0.72) so there is
+    # far less dead space between rows for a click to land on nothing.
+    ROW_WIDTH = 0.92
+
     fig.add_trace(
         go.Bar(
             y=labels,
@@ -574,7 +586,7 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
             # would make the row's background unclickable outside the block.
             hoverinfo="none",
             showlegend=False,
-            width=0.72,
+            width=ROW_WIDTH,
         )
     )
 
@@ -592,8 +604,10 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
                 base=list(local(starts)),
                 orientation="h",
                 marker=dict(color=BLOCK_FOCUS if is_focus else BLOCK, line=dict(width=0)),
-                showlegend=False,
-                width=0.72,
+                showlegend=True,
+                name=f"{focus_team}'s news window" if is_focus else "Other clubs' news window",
+                legendgroup="focus-window" if is_focus else "other-window",
+                width=ROW_WIDTH,
                 customdata=np.stack(
                     [
                         block["match"], block["competition"], block["location"],
@@ -611,6 +625,32 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
             )
         )
 
+    # A busy/blocked-off block after kickoff — like a calendar's "busy" shading —
+    # marking the ~2h a match is likely still going, whether or not it falls in
+    # anyone's news window.
+    busy_source = rows[rows["kickoff_utc"] < x_hi]
+    if not busy_source.empty:
+        busy_starts = busy_source["kickoff_utc"].clip(lower=x_lo)
+        busy_ends = (busy_source["kickoff_utc"] + pd.Timedelta(minutes=120)).clip(upper=x_hi)
+        busy_widths = (busy_ends - busy_starts).dt.total_seconds() * 1000.0
+        fig.add_trace(
+            go.Bar(
+                y=list(busy_source["_label"]),
+                x=list(busy_widths),
+                base=list(local(busy_starts)),
+                orientation="h",
+                marker=dict(
+                    color=BUSY_FILL,
+                    pattern=dict(shape="/", fgcolor=BUSY_LINE, size=6, solidity=0.28),
+                    line=dict(color=BUSY_LINE, width=1),
+                ),
+                width=ROW_WIDTH,
+                hoverinfo="none",
+                showlegend=True,
+                name="Match likely still in progress (~2h from kickoff)",
+            )
+        )
+
     inside = rows[(rows["kickoff_utc"] >= x_lo) & (rows["kickoff_utc"] <= x_hi)]
     if not inside.empty:
         fig.add_trace(
@@ -620,7 +660,8 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
                 mode="markers",
                 marker=dict(symbol="line-ns", size=15, line=dict(color=KO_TICK, width=2)),
                 hoverinfo="none",
-                showlegend=False,
+                showlegend=True,
+                name="Kickoff",
             )
         )
 
@@ -657,10 +698,15 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
     )
 
     fig.update_layout(
+        template=PLOT_TEMPLATE,
         barmode="overlay",
-        bargap=0.28,
-        height=max(260, 30 * len(labels) + 150),
-        margin=dict(l=10, r=20, t=60, b=60),
+        bargap=0.15,
+        height=max(260, 30 * len(labels) + 150) + 40,
+        margin=dict(l=10, r=20, t=100, b=60),
+        # A plain click should always be a click, never the start of a zoom-drag —
+        # otherwise the tiny amount of mouse movement in a real click can be read
+        # as a drag and swallow the selection.
+        dragmode=False,
         xaxis=dict(showgrid=True, gridcolor="rgba(140,144,152,0.22)", **time_axis),
         xaxis2=dict(overlaying="x", side="top", showgrid=False, **time_axis),
         yaxis=dict(
@@ -673,6 +719,14 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         hoverlabel=dict(font_size=12),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.1,
+            xanchor="left",
+            x=0,
+            font=dict(size=11),
+        ),
     )
     return fig
 
@@ -705,17 +759,11 @@ for gw in selected_gws:
     focus_from, focus_to = core.info_window(focus_ko, early_lead, late_lead)
     others = meshed[meshed["team"] != focus_team]
     overlapping = others[others["overlap_min"] > 0]
-    misses = others[others["score_min"] < 0]
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3 = st.columns(3)
     m1.metric(f"{focus_team} kicks off", stamp(focus_ko))
-    m2.metric("Its news window", f"{clock(focus_from)} – {clock(focus_to)}")
+    m2.metric("Lineup Availability Window", f"{clock(focus_from)} – {clock(focus_to)}")
     m3.metric("Clubs that overlap", len(overlapping))
-    m4.metric(
-        "Then a lull of",
-        fmt_duration(pd.Timedelta(minutes=misses["lull_min"].min())) if len(misses) else "—",
-        help="Dead air between the end of the overlapping group's news and the next club's.",
-    )
 
     if not focus_row["covered"]:
         st.warning(f"{focus_team}'s game is flagged NOT_COVERED — Sorare will not score it at all.")
@@ -745,25 +793,12 @@ for gw in selected_gws:
         picked = None if choice == "—" else choice
 
     if picked:
-        mine = held_cards[held_cards["team"] == picked]
-        if mine.empty:
-            st.caption(f"No cards for {picked} in the current scarcity/in-season filter.")
-        else:
-            with st.container(border=True):
-                st.markdown(f"**My {picked} cards** — {len(mine)}")
-                detail = pd.DataFrame({
-                    "Player": mine["player"],
-                    "Position": [POS_SHORT.get(x, x or "—") for x in mine["position"]],
-                    "Scarcity": [
-                        sorare_api.SCARCITY_LABELS.get(x, x or "—") for x in mine["scarcity"]
-                    ],
-                    "In season": [
-                        "—" if pd.isna(x) else ("yes" if x else "no") for x in mine["in_season"]
-                    ],
-                })
-                show_table(detail.sort_values("Player").reset_index(drop=True), hide_index=True)
+        render_my_cards(picked)
     elif not held_cards.empty and _SUPPORTS_SELECT:
-        st.caption("Click a club's row on the chart to see the cards you hold for it.")
+        st.caption(
+            "Click a club's row on the chart — the background, the block, or the kickoff "
+            "tick all work — to see the cards you hold for it."
+        )
 
     lulls = core.quiet_stretches(window[window["gameweek"] == gw], top=4, min_minutes=180)
     if lulls:
@@ -855,7 +890,19 @@ def style_table(df: pd.DataFrame):
 
 weeks = ", ".join(f"GW {g}" for g in selected_gws)
 st.markdown(f"**Every club in this competition — {weeks}** · {len(table)} rows")
-show_table(style_table(table), hide_index=True, height=min(640, 40 + 35 * len(table)))
+table_event = show_table(
+    style_table(table),
+    key="f_table_select",
+    selectable=not held_cards.empty,
+    hide_index=True,
+    height=min(640, 40 + 35 * len(table)),
+)
+table_row = clicked_row(table_event) if not held_cards.empty else None
+table_picked = table["Club"].iloc[table_row] if table_row is not None else None
+if table_picked:
+    render_my_cards(table_picked)
+elif not held_cards.empty and _SUPPORTS_SELECT:
+    st.caption("Click a row above to see the cards you hold for that club.")
 st.download_button(
     "Download this list",
     table.to_csv(index=False).encode(),
