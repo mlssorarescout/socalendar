@@ -32,8 +32,7 @@ st.markdown(
     """
     <style>
       .block-container {padding-top: 2.4rem; max-width: 1450px;}
-      div[data-testid="stMetricValue"] {font-size: 1.35rem;}
-      div[data-testid="stMetric"] {text-align: center;}
+      .stat-line {text-align: center; font-size: 1rem; margin: 0;}
       .note {color:#7a7f87; font-size:0.84rem; line-height:1.5;}
     </style>
     """,
@@ -760,9 +759,19 @@ for gw in selected_gws:
     overlapping = others[others["overlap_min"] > 0]
 
     m1, m2, m3 = st.columns(3)
-    m1.metric(f"{focus_team} kicks off", stamp(focus_ko))
-    m2.metric("Lineup Availability Window", f"{clock(focus_from)} – {clock(focus_to)}")
-    m3.metric("Clubs that overlap", len(overlapping))
+    m1.markdown(
+        f"<p class='stat-line'>{focus_team} kicks off — <b>{stamp(focus_ko)}</b></p>",
+        unsafe_allow_html=True,
+    )
+    m2.markdown(
+        f"<p class='stat-line'>Lineup Availability Window — "
+        f"<b>{clock(focus_from)} – {clock(focus_to)}</b></p>",
+        unsafe_allow_html=True,
+    )
+    m3.markdown(
+        f"<p class='stat-line'>Clubs that overlap — <b>{len(overlapping)}</b></p>",
+        unsafe_allow_html=True,
+    )
 
     if not focus_row["covered"]:
         st.warning(f"{focus_team}'s game is flagged NOT_COVERED — Sorare will not score it at all.")
