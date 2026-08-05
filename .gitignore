@@ -1,0 +1,21 @@
+# Secrets — never commit the real one, only secrets.toml.example
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Editor / IDE
+.vs/
+.vscode/
+.idea/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
