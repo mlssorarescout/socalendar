@@ -33,6 +33,7 @@ st.markdown(
     <style>
       .block-container {padding-top: 2.4rem; max-width: 1450px;}
       div[data-testid="stMetricValue"] {font-size: 1.35rem;}
+      div[data-testid="stMetric"] {text-align: center;}
       .note {color:#7a7f87; font-size:0.84rem; line-height:1.5;}
     </style>
     """,
@@ -173,8 +174,8 @@ lut = _difficulty(diff_path)
 # stopped being a valid choice.
 FILTER_KEYS = [
     "f_group", "f_tz", "f_early", "f_late", "f_leagues", "f_rows",
-    "f_uncovered", "f_tbd", "f_gw", "f_search", "f_focus", "f_view",
-    "f_scarcities", "f_owned_only", "f_season",
+    "f_uncovered", "f_tbd", "f_gw", "f_search", "f_focus", "f_whole_gw",
+    "f_scarcities", "f_owned_only", "f_season_toggle",
 ]
 
 
@@ -342,13 +343,15 @@ with st.sidebar:
             "in_season" in held_cards.columns and held_cards["in_season"].notna().any()
         )
         if has_season:
-            season_mode = st.radio(
-                "In-season cards",
-                ["Any", "Only clubs I have in-season", "Only clubs I have none"],
-                key="f_season",
+            in_season_only = st.toggle(
+                "In-Season Cards",
+                value=False,
+                key="f_season_toggle",
+                help="Off shows all cards. On narrows to clubs where you hold an "
+                "in-season card.",
             )
         else:
-            season_mode = "Any"
+            in_season_only = False
             st.caption("`inSeasonEligible` was unavailable on this schema shape.")
 
         held_cards = sorare_api.annotate_teams(
@@ -357,9 +360,8 @@ with st.sidebar:
         owned, unmatched_clubs = sorare_api.match_clubs(
             held_cards, sorted(team_leagues["team"].unique())
         )
-        if has_season and not owned.empty and season_mode != "Any":
-            wanted = owned["in_season"] > 0
-            owned = owned[wanted if season_mode.endswith("in-season") else ~wanted]
+        if has_season and not owned.empty and in_season_only:
+            owned = owned[owned["in_season"] > 0]
 
         owned_only = st.toggle(
             "Only clubs I hold cards for",
@@ -536,13 +538,10 @@ def render_my_cards(picked):
 
 st.title("Sorare Kickoff Planner")
 
-view = st.radio(
-    "Timeframe",
-    ["Around the focus club", "Whole gameweek"],
-    horizontal=True,
-    label_visibility="collapsed",
-    key="f_view",
-)
+# The toggle itself renders below the chart (see the render loop), but its
+# value is needed here first to build the chart — same session-state
+# pre-read pattern as "More options".
+whole_gameweek = st.session_state.get("f_whole_gw", False)
 
 def axis_ticks(x_lo, x_hi):
     """Tick spacing in milliseconds, plus a label format, for a given span.
@@ -771,7 +770,7 @@ for gw in selected_gws:
         st.caption(f"{focus_team} plays twice this gameweek. Anchored on the first, {stamp(focus_ko)}.")
 
     chart_rows = meshed.head(rows_shown + 1)
-    if view == "Whole gameweek":
+    if whole_gameweek:
         x_lo, x_hi = core.gameweek_bounds(gw)
     else:
         pad = pd.Timedelta(minutes=45)
@@ -783,6 +782,8 @@ for gw in selected_gws:
         key=f"chart_{gw}",
         selectable=not held_cards.empty,
     )
+
+    st.toggle("Whole gameweek", value=False, key="f_whole_gw")
 
     picked = clicked_club(event) if not held_cards.empty else None
     if held_cards.empty:
