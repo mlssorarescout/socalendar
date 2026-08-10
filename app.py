@@ -23,7 +23,7 @@ from core import POSITIONS, fmt_duration, league_label
 
 st.set_page_config(
     page_title="Sorare Kickoff Planner",
-    page_icon="⏱",
+    page_icon="images/logo_icon_dark.png",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -33,22 +33,33 @@ st.markdown(
     <style>
       .block-container {padding-top: 2.4rem; max-width: 1450px;}
       .stat-line {text-align: center; font-size: 1rem; margin: 0;}
-      .note {color:#7a7f87; font-size:0.84rem; line-height:1.5;}
+      .note {color:#9096b3; font-size:0.84rem; line-height:1.5;}
+      .st-key-stat_card, .st-key-cards_panel {background: #161c30;}
+      .st-key-stat_card [data-testid="stHorizontalBlock"] {align-items: center;}
+      .chart-legend {
+        display: flex; flex-wrap: wrap; align-items: center;
+        gap: 0.4rem 1.4rem; font-size: 0.82rem; color: #9096b3;
+        margin: 0.25rem 0 0.75rem;
+      }
+      .legend-item {display: inline-flex; align-items: center; gap: 0.45rem;}
+      .legend-swatch {width: 12px; height: 12px; border-radius: 3px; flex: none;}
+      .legend-tick {width: 3px; height: 14px; border-radius: 1px; flex: none;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# The app defaults to dark (see .streamlit/config.toml) but a viewer can still flip
-# to light from Settings, so the chart's own colors follow whichever is active
-# rather than assuming dark. `type` is None for one render right after a theme
-# change; dark is the safer fallback since it is the default.
-IS_DARK = st.context.theme.type != "light"
+# st.context.theme.type reports the browser/OS color-scheme preference, not
+# which theme is actually rendered — it says "light" even when our own
+# .streamlit/config.toml forces base="dark" and the page is visibly dark. The
+# app only ships a dark design (no [theme.light] palette), so dark is simply
+# the fixed reality here rather than something to detect.
+IS_DARK = True
 
-TRACK_FILL = "rgba(140,144,152,0.10)"
-TRACK_LINE = "rgba(140,144,152,0.45)"
+TRACK_FILL = "rgba(129,135,180,0.12)"
+TRACK_LINE = "rgba(129,135,180,0.40)"
 BLOCK = "#2fae66"
-BLOCK_FOCUS = "#3f6fe0"
+BLOCK_FOCUS = "#6366f1"
 KO_TICK = "#e8e8ec" if IS_DARK else "#2b2f36"
 BUSY_FILL = "rgba(199,123,60,0.20)"
 BUSY_LINE = "rgba(199,123,60,0.65)"
@@ -248,6 +259,10 @@ def load_gallery(username, scarcities, api_key):
 
 
 with st.sidebar:
+    st.image(
+        "images/logo_wordmark_dark.png" if IS_DARK else "images/logo_wordmark_light.png",
+        use_container_width=True,
+    )
     st.markdown("### My cards")
     username = st.text_input(
         "Sorare username",
@@ -516,7 +531,7 @@ def render_my_cards(picked):
     if mine.empty:
         st.caption(f"No cards for {picked} in the current scarcity/in-season filter.")
         return
-    with st.container(border=True):
+    with st.container(border=True, key="cards_panel"):
         st.markdown(f"**My {picked} cards** — {len(mine)}")
         detail = pd.DataFrame({
             "Player": mine["player"],
@@ -602,9 +617,7 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
                 base=list(local(starts)),
                 orientation="h",
                 marker=dict(color=BLOCK_FOCUS if is_focus else BLOCK, line=dict(width=0)),
-                showlegend=True,
-                name=f"{focus_team}'s news window" if is_focus else "Other clubs' news window",
-                legendgroup="focus-window" if is_focus else "other-window",
+                showlegend=False,
                 width=ROW_WIDTH,
                 customdata=np.stack(
                     [
@@ -644,8 +657,7 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
                 ),
                 width=ROW_WIDTH,
                 hoverinfo="none",
-                showlegend=True,
-                name="Match likely still in progress (~2h from kickoff)",
+                showlegend=False,
             )
         )
 
@@ -658,8 +670,7 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
                 mode="markers",
                 marker=dict(symbol="line-ns", size=15, line=dict(color=KO_TICK, width=2)),
                 hoverinfo="none",
-                showlegend=True,
-                name="Kickoff",
+                showlegend=False,
             )
         )
 
@@ -697,10 +708,11 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
 
     fig.update_layout(
         template=PLOT_TEMPLATE,
+        font=dict(family="Inter, sans-serif"),
         barmode="overlay",
         bargap=0.15,
-        height=max(260, 30 * len(labels) + 150) + 40,
-        margin=dict(l=10, r=20, t=100, b=60),
+        height=max(260, 30 * len(labels) + 150),
+        margin=dict(l=10, r=20, t=70, b=60),
         # A plain click should always be a click, never the start of a zoom-drag —
         # otherwise the tiny amount of mouse movement in a real click can be read
         # as a drag and swallow the selection.
@@ -717,17 +729,33 @@ def overlap_chart(rows: pd.DataFrame, focus_from, focus_to, x_lo, x_hi) -> go.Fi
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         hoverlabel=dict(font_size=12),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.1,
-            xanchor="left",
-            x=0,
-            font=dict(size=11),
-        ),
+        showlegend=False,
     )
     return fig
 
+
+def chart_legend(focus_team: str) -> str:
+    """Static HTML legend for the chart's color coding.
+
+    Plotly's in-figure legend positions itself as a fraction of the plot
+    area, so a short chart (few clubs) puts it right on top of the axis date
+    labels. Rendering it as ordinary HTML above the figure sidesteps that
+    entirely and keeps it a fixed height regardless of row count.
+    """
+    swatches = "".join(
+        f"<span class='legend-item'><span class='legend-swatch' "
+        f"style='background:{color}'></span>{label}</span>"
+        for color, label in [
+            (BLOCK, "Other clubs' news window"),
+            (BLOCK_FOCUS, f"{focus_team}'s news window"),
+            (BUSY_LINE, "Match likely still in progress (~2h from kickoff)"),
+        ]
+    )
+    swatches += (
+        f"<span class='legend-item'><span class='legend-tick' "
+        f"style='background:{KO_TICK}'></span>Kickoff</span>"
+    )
+    return f"<div class='chart-legend'>{swatches}</div>"
 
 
 listings = []
@@ -758,20 +786,21 @@ for gw in selected_gws:
     others = meshed[meshed["team"] != focus_team]
     overlapping = others[others["overlap_min"] > 0]
 
-    m1, m2, m3 = st.columns(3)
-    m1.markdown(
-        f"<p class='stat-line'>{focus_team} kicks off — <b>{stamp(focus_ko)}</b></p>",
-        unsafe_allow_html=True,
-    )
-    m2.markdown(
-        f"<p class='stat-line'>Lineup Availability Window — "
-        f"<b>{clock(focus_from)} – {clock(focus_to)}</b></p>",
-        unsafe_allow_html=True,
-    )
-    m3.markdown(
-        f"<p class='stat-line'>Clubs that overlap — <b>{len(overlapping)}</b></p>",
-        unsafe_allow_html=True,
-    )
+    with st.container(border=True, key="stat_card"):
+        m1, m2, m3 = st.columns(3)
+        m1.markdown(
+            f"<p class='stat-line'>{focus_team} kicks off — <b>{stamp(focus_ko)}</b></p>",
+            unsafe_allow_html=True,
+        )
+        m2.markdown(
+            f"<p class='stat-line'>Lineup Availability Window — "
+            f"<b>{clock(focus_from)} – {clock(focus_to)}</b></p>",
+            unsafe_allow_html=True,
+        )
+        m3.markdown(
+            f"<p class='stat-line'>Clubs that overlap — <b>{len(overlapping)}</b></p>",
+            unsafe_allow_html=True,
+        )
 
     if not focus_row["covered"]:
         st.warning(f"{focus_team}'s game is flagged NOT_COVERED — Sorare will not score it at all.")
@@ -786,6 +815,7 @@ for gw in selected_gws:
         x_lo = chart_rows["window_from"].min() - pad
         x_hi = chart_rows["kickoff_utc"].max() + pad
 
+    st.markdown(chart_legend(focus_team), unsafe_allow_html=True)
     event = chart(
         overlap_chart(chart_rows, focus_from, focus_to, x_lo, x_hi),
         key=f"chart_{gw}",

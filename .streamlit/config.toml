@@ -1,2 +1,19 @@
 [theme]
 base = "dark"
+primaryColor = "#6366f1"
+backgroundColor = "#0b0f1e"
+secondaryBackgroundColor = "#161c30"
+textColor = "#e7e9f3"
+linkColor = "#8b8ff8"
+borderColor = "rgba(255,255,255,0.08)"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+headingFontWeights = [700, 700, 600, 600, 600, 600]
+baseRadius = "0.85rem"
+buttonRadius = "0.6rem"
+showWidgetBorder = true
+
+[theme.sidebar]
+backgroundColor = "#0b0f1e"
+secondaryBackgroundColor = "#161c30"
+borderColor = "rgba(255,255,255,0.08)"
