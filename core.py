@@ -154,7 +154,7 @@ SORARE_COMPETITION_MAPPING = {
     "Ligue 2": "Contender",
     "Bundesliga": "Bundesliga",
     "2. Bundesliga": "Contender",
-    "Serie A": "Serie A",
+    "Serie A": "Contender",
     "Serie B": "Contender",
     "Eredivisie": "Eredivisie",
     "Primeira Liga": "Primeira Liga",
