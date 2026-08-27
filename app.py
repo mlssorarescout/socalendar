@@ -185,7 +185,7 @@ lut = _difficulty(diff_path)
 FILTER_KEYS = [
     "f_group", "f_tz", "f_early", "f_late", "f_leagues", "f_rows",
     "f_uncovered", "f_tbd", "f_gw", "f_search", "f_focus", "f_whole_gw",
-    "f_scarcities", "f_owned_only", "f_season_toggle",
+    "f_scarcities", "f_owned_only", "f_season_toggle", "f_position",
 ]
 
 
@@ -326,6 +326,7 @@ with st.sidebar:
     rows_shown = st.session_state.get("f_rows", 60)
     hide_uncovered = st.session_state.get("f_uncovered", True)
     hide_tbd = st.session_state.get("f_tbd", True)
+    position_filter = st.session_state.get("f_position", [])
 
     pool_slugs = leagues or group_slugs
     pool_teams = set(team_leagues.loc[team_leagues["slug"].isin(pool_slugs), "team"])
@@ -352,6 +353,9 @@ with st.sidebar:
             held_cards = held_cards[held_cards["scarcity"].isin(show_scarcities)]
         else:
             st.caption("Scarcity per card was unavailable on this schema shape.")
+
+        if position_filter:
+            held_cards = held_cards[held_cards["position"].isin(position_filter)]
 
         has_season = (
             "in_season" in held_cards.columns and held_cards["in_season"].notna().any()
@@ -470,6 +474,14 @@ with st.sidebar:
         st.slider("Clubs on the chart", 5, 120, 60, 5, key="f_rows")
         st.toggle("Hide games Sorare does not score", value=True, key="f_uncovered")
         st.toggle("Hide placeholder kickoff times", value=True, key="f_tbd")
+        st.multiselect(
+            "Position",
+            POSITIONS,
+            format_func=lambda p: POS_SHORT.get(p, p),
+            help="Optional. Narrows 'my cards' to clubs where you hold a card at "
+            "this position. Empty means every position.",
+            key="f_position",
+        )
         st.button("Reset all filters", on_click=reset_filters, key="f_reset")
 
 
